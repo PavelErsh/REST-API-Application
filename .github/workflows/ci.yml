@@ -1,0 +1,81 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-test.txt
+
+    - name: Clean macOS resource files before linting
+      run: |
+        echo "Cleaning macOS resource files..."
+        # Удаляем файлы ресурсов macOS
+        find . -name "._*" -delete 2>/dev/null || true
+        find . -name ".DS_Store" -delete 2>/dev/null || true
+        find . -name "*.pyc" -delete 2>/dev/null || true
+        # Очищаем __pycache__ директории
+        find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+        # Очищаем другие временные файлы IDE
+        find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+        find . -type d -name ".coverage" -exec rm -rf {} + 2>/dev/null || true
+        echo "✅ macOS resource files cleaned"
+
+    - name: Run linting
+      run: |
+        pip install flake8
+        # Первая проверка - критические ошибки
+        flake8 app --count --select=E9,F63,F7,F82 --show-source --statistics \
+          --exclude=*/\.*,*.pyc,__pycache__,.git,.pytest_cache,.coverage
+        # Вторая проверка - все остальные стилистические проблемы
+        flake8 app --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics \
+          --exclude=*/\.*,*.pyc,__pycache__,.git,.pytest_cache,.coverage
+
+    - name: Run tests with pytest
+      env:
+        DATABASE_URL: postgresql://user:password@localhost:5432/test_db
+        API_KEY: test-api-key-123456
+      run: |
+        pytest tests/ -v --cov=app --cov-report=xml --cov-report=term-missing
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: false
+
+  
